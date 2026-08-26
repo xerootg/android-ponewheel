@@ -100,7 +100,10 @@ dependencies {
     //implementation 'com.github.anastr:speedviewlib:1.1.7'
 
     // RxJava
-    implementation "com.patloew.rxlocation:rxlocation:1.0.3"
+    // JCenter's rxlocation AAR is gone from every surviving mirror; the same
+    // library (same com.patloew.rxlocation package) is buildable from source
+    // via JitPack.
+    implementation "com.github.patloew:RxLocation:1.0.5"
     implementation "com.tbruyelle.rxpermissions2:rxpermissions:0.9.4@aar"
     implementation "io.reactivex.rxjava2:rxjava:2.1.5"
     implementation "io.reactivex.rxjava2:rxandroid:2.0.1"
