@@ -2,6 +2,8 @@ apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 apply plugin: 'kotlin-android-extensions'
 
+def ciKeystore = System.getenv("PONEWHEEL_KEYSTORE")
+
 android {
     compileSdkVersion 28
     buildToolsVersion '28.0.3'
@@ -17,10 +19,25 @@ android {
         versionCode 44
         versionName "4.4"
     }
+    signingConfigs {
+        ci {
+            if (ciKeystore) {
+                storeFile file(ciKeystore)
+                storePassword System.getenv("PONEWHEEL_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("PONEWHEEL_KEY_ALIAS")
+                keyPassword System.getenv("PONEWHEEL_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // Signed only when the build is handed a keystore (see .github/workflows).
+            if (ciKeystore) {
+                signingConfig signingConfigs.ci
+            }
         }
         debug {
             debuggable true

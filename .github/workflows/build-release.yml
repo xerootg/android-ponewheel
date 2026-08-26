@@ -1,0 +1,129 @@
+name: Build & Release APK
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Gradle 5.4.1 / AGP 3.5.0 are Java 8 era tooling.
+  GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx3g -Dorg.gradle.daemon=false
+  ANDROID_COMPILE_SDK: '28'
+  ANDROID_BUILD_TOOLS: '28.0.3'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Android SDK packages
+        run: |
+          set -euo pipefail
+          # sdkmanager needs a modern JDK; the Gradle build below needs JDK 8.
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses > /dev/null
+          "$SDKMANAGER" --install \
+            "platforms;android-${ANDROID_COMPILE_SDK}" \
+            "build-tools;${ANDROID_BUILD_TOOLS}"
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('build.gradle', 'app/build.gradle', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
+      - name: Prepare signing keystore
+        id: keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KS="$RUNNER_TEMP/ponewheel.jks"
+          if [ -n "${KEYSTORE_BASE64:-}" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$KS"
+            echo "PONEWHEEL_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "PONEWHEEL_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "PONEWHEEL_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+            echo "ephemeral=false" >> "$GITHUB_OUTPUT"
+          else
+            # No signing secrets configured: mint a throwaway key so the APK is at
+            # least installable. Upgrades across releases will require an uninstall.
+            keytool -genkeypair -noprompt \
+              -keystore "$KS" -storepass ponewheel -keypass ponewheel \
+              -alias ponewheel -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=pOneWheel CI, OU=CI, O=ponewheel fork, C=US"
+            echo "PONEWHEEL_KEYSTORE_PASSWORD=ponewheel" >> "$GITHUB_ENV"
+            echo "PONEWHEEL_KEY_ALIAS=ponewheel" >> "$GITHUB_ENV"
+            echo "PONEWHEEL_KEY_PASSWORD=ponewheel" >> "$GITHUB_ENV"
+            echo "ephemeral=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "PONEWHEEL_KEYSTORE=$KS" >> "$GITHUB_ENV"
+
+      - name: Build release APK
+        run: ./gradlew --no-daemon --stacktrace assembleRelease
+
+      - name: Unit tests
+        run: ./gradlew --no-daemon testReleaseUnitTest
+
+      - name: Collect APK
+        id: apk
+        run: |
+          set -euo pipefail
+          APK=$(find app/build/outputs/apk/release -name '*.apk' ! -name '*unsigned*' | head -1)
+          [ -n "$APK" ] || { echo "no signed APK produced"; find app/build/outputs -name '*.apk'; exit 1; }
+          VERSION_NAME=$(grep -oP 'versionName\s+"\K[^"]+' app/build.gradle)
+          VERSION_CODE=$(grep -oP 'versionCode\s+\K\d+' app/build.gradle)
+          DEST="ponewheel-${VERSION_NAME}.apk"
+          cp "$APK" "$DEST"
+          echo "path=$DEST" >> "$GITHUB_OUTPUT"
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          "$ANDROID_HOME/build-tools/${ANDROID_BUILD_TOOLS}/apksigner" verify --print-certs "$DEST"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ponewheel-apk
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EPHEMERAL: ${{ steps.keystore.outputs.ephemeral }}
+        run: |
+          set -euo pipefail
+          NOTES="$RUNNER_TEMP/notes.md"
+          {
+            echo "pOneWheel **${{ steps.apk.outputs.version_name }}** (versionCode ${{ steps.apk.outputs.version_code }})"
+            echo
+            echo "Unofficial build of [ponewheel/android-ponewheel](https://github.com/ponewheel/android-ponewheel) from \`${GITHUB_SHA}\`, built by GitHub Actions."
+            echo
+            echo "- minSdk 21 / targetSdk 28"
+            echo "- Sideload only — not a Play Store build."
+            if [ "$EPHEMERAL" = "true" ]; then
+              echo "- Signed with a **throwaway CI key**: each release gets a different key, so upgrading in place will fail with a signature mismatch. Uninstall the previous build first, or set the \`KEYSTORE_BASE64\`/\`KEYSTORE_PASSWORD\`/\`KEY_ALIAS\`/\`KEY_PASSWORD\` repo secrets for stable signing."
+            fi
+          } > "$NOTES"
+          gh release create "${GITHUB_REF_NAME}" "${{ steps.apk.outputs.path }}" \
+            --title "pOneWheel ${{ steps.apk.outputs.version_name }}" \
+            --notes-file "$NOTES"
