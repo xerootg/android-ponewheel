@@ -28,7 +28,8 @@ jobs:
           # sdkmanager needs a modern JDK; the Gradle build below needs JDK 8.
           export JAVA_HOME="$JAVA_HOME_17_X64"
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$SDKMANAGER" --licenses > /dev/null
+          # `yes` dies of SIGPIPE once sdkmanager stops reading; that is not a failure.
+          yes 2>/dev/null | "$SDKMANAGER" --licenses > /dev/null || true
           "$SDKMANAGER" --install \
             "platforms;android-${ANDROID_COMPILE_SDK}" \
             "build-tools;${ANDROID_BUILD_TOOLS}"
