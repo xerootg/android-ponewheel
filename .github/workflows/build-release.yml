@@ -5,6 +5,15 @@ on:
     branches: ['**']
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Create a GitHub release for the APK this run builds
+        type: boolean
+        default: false
+      tag:
+        description: Tag to create (defaults to v<versionName>)
+        type: string
+        default: ''
 
 concurrency:
   group: build-${{ github.ref }}
@@ -19,6 +28,8 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -107,12 +118,22 @@ jobs:
           if-no-files-found: error
 
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_release
         env:
           GH_TOKEN: ${{ github.token }}
           EPHEMERAL: ${{ steps.keystore.outputs.ephemeral }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
+          # On a tag push, release that tag; on a manual run, create v<versionName>
+          # pointing at the commit this run built.
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            TAG="$GITHUB_REF_NAME"
+            TARGET=()
+          else
+            TAG="${INPUT_TAG:-v${{ steps.apk.outputs.version_name }}}"
+            TARGET=(--target "$GITHUB_SHA")
+          fi
           NOTES="$RUNNER_TEMP/notes.md"
           {
             echo "pOneWheel **${{ steps.apk.outputs.version_name }}** (versionCode ${{ steps.apk.outputs.version_code }})"
@@ -125,6 +146,6 @@ jobs:
               echo "- Signed with a **throwaway CI key**: each release gets a different key, so upgrading in place will fail with a signature mismatch. Uninstall the previous build first, or set the \`KEYSTORE_BASE64\`/\`KEYSTORE_PASSWORD\`/\`KEY_ALIAS\`/\`KEY_PASSWORD\` repo secrets for stable signing."
             fi
           } > "$NOTES"
-          gh release create "${GITHUB_REF_NAME}" "${{ steps.apk.outputs.path }}" \
+          gh release create "$TAG" "${{ steps.apk.outputs.path }}" "${TARGET[@]}" \
             --title "pOneWheel ${{ steps.apk.outputs.version_name }}" \
             --notes-file "$NOTES"
