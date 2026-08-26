@@ -1,0 +1,26 @@
+name: probe-artifacts
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Probe candidate repositories
+        run: |
+          probe() { printf '%-6s %s\n' "$(curl -sSL -o /dev/null -w '%{http_code}' --max-time 20 "$1")" "$1"; }
+          for base in https://maven.aliyun.com/repository/public https://maven.aliyun.com/repository/jcenter https://maven.aliyun.com/repository/central; do
+            for ext in pom aar jar; do
+              probe "$base/com/patloew/rxlocation/rxlocation/1.0.3/rxlocation-1.0.3.$ext"
+              probe "$base/com/tbruyelle/rxpermissions2/rxpermissions/0.9.4/rxpermissions-0.9.4.$ext"
+              probe "$base/org/honorato/multistatetogglebutton/multistatetogglebutton/0.2.1/multistatetogglebutton-0.2.1.$ext"
+            done
+          done
+          echo "--- jitpack ---"
+          for ext in pom aar; do
+            probe "https://jitpack.io/com/github/patloew/RxLocation/1.0.5/RxLocation-1.0.5.$ext"
+            probe "https://jitpack.io/com/github/tbruyelle/rxpermissions/0.9.4/rxpermissions-0.9.4.$ext"
+            probe "https://jitpack.io/com/github/tbruyelle/rxpermissions/0.10.2/rxpermissions-0.10.2.$ext"
+            probe "https://jitpack.io/com/github/honorato/multistatetogglebutton/0.2.1/multistatetogglebutton-0.2.1.$ext"
+            probe "https://jitpack.io/com/github/PhilJay/MPAndroidChart/v3.0.2/MPAndroidChart-v3.0.2.$ext"
+          done
+          echo "--- what does aliyun return for the rxlocation pom? ---"
+          curl -sSL --max-time 20 https://maven.aliyun.com/repository/public/com/patloew/rxlocation/rxlocation/1.0.3/rxlocation-1.0.3.pom | head -40
